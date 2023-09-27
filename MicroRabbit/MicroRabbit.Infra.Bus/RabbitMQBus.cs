@@ -21,8 +21,8 @@ namespace MicroRabbit.Infra.Bus
 
         public RabbitMQBus(IMediator mediator)
         {
-            _mediator   = mediator;
-            _handlers   = new Dictionary<string, List<Type>>();
+            _mediator = mediator;
+            _handlers = new Dictionary<string, List<Type>>();
             _eventTypes = new List<Type>();
         }
 
@@ -48,7 +48,7 @@ namespace MicroRabbit.Infra.Bus
                 channel.QueueDeclare(eventName, false, false, false, null);
 
                 var message = JsonConvert.SerializeObject(@event);
-                var body    = Encoding.UTF8.GetBytes(message);
+                var body = Encoding.UTF8.GetBytes(message);
 
                 channel.BasicPublish("", eventName, null, body);
             }
@@ -56,7 +56,7 @@ namespace MicroRabbit.Infra.Bus
 
         public void Subscribe<T, TH>() where T : Event where TH : IEventHandler<T>
         {
-            var eventName   = typeof(T).Name;
+            var eventName = typeof(T).Name;
             var handlerType = typeof(TH);
 
             if (!_eventTypes.Contains(typeof(T)))
@@ -83,14 +83,14 @@ namespace MicroRabbit.Infra.Bus
         {
             var factory = new ConnectionFactory()
             {
-                HostName               = "mashq",
+                HostName = "mashq",
                 DispatchConsumersAsync = true,
-                Port                   = 5672
+                Port = 5672
             };
 
             var connection = factory.CreateConnection();
-            var channel    = connection.CreateModel();
-            var eventName  = typeof(T).Name;
+            var channel = connection.CreateModel();
+            var eventName = typeof(T).Name;
 
             channel.QueueDeclare(eventName, false, false, false, null);
 
@@ -101,9 +101,43 @@ namespace MicroRabbit.Infra.Bus
             channel.BasicConsume(eventName, true, consumer);
         }
 
-        private Task Consumer_Received(object sender, BasicDeliverEventArgs @event)
+        private async Task Consumer_Received(object sender, BasicDeliverEventArgs e)
         {
-            throw new NotImplementedException();
+            var eventName = e.RoutingKey;
+            var message = Encoding.UTF8.GetString(e.Body.ToArray());
+
+            try
+            {
+                await ProcessEvent(eventName, message).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+
+            }
+        }
+
+        private async Task ProcessEvent(string eventName, string message)
+        {
+            if (_handlers.ContainsKey(eventName))
+            {
+                var subscriptions = _handlers[eventName];
+
+                foreach (var subscription in subscriptions)
+                {
+                    var handler = Activator.CreateInstance(subscription);
+
+                    if (handler == null)
+                    {
+                        continue;
+                    }
+
+                    var eventType    = _eventTypes.SingleOrDefault(t => t.Name == eventName);
+                    var @event       = JsonConvert.DeserializeObject(message, eventType);
+                    var concreteType = typeof(IEventHandler<>).MakeGenericType(eventType);
+
+                    await (Task)concreteType.GetMethod("Handle").Invoke(handler, new object[] { @event });
+                }
+            }
         }
     }
 }
